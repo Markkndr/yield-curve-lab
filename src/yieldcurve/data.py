@@ -121,6 +121,20 @@ def validate_yield_table(table: pd.DataFrame) -> None:
         raise ValueError(f"yields outside {YIELD_BOUNDS}%:\n{table[bad_rows].head()}")
 
 
+def curve_on(table: pd.DataFrame, date: str | pd.Timestamp) -> pd.Series:
+    """Return the curve on the last trading day on or before `date`.
+
+    The Series is named by the trading day actually used, so callers can tell
+    when a weekend or holiday was rolled back. Maturities without data that
+    day (not yet issued) are dropped.
+    """
+    target = pd.Timestamp(date)
+    pos = table.index.searchsorted(target, side="right") - 1
+    if pos < 0:
+        raise KeyError(f"no data on or before {target.date()}")
+    return table.iloc[pos].dropna().rename(table.index[pos])
+
+
 def load_us_yields(
     refresh: bool = False,
     cache_path: Path = US_CACHE_PATH,

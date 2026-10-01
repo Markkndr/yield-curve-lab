@@ -9,6 +9,7 @@ A Python research project on US and Hungarian government bond yield curves: a cl
 <br>
 
 <img src="https://img.shields.io/badge/Status-In_Progress-orange?style=for-the-badge" alt="Status: In Progress">
+<a href="https://github.com/Markkndr/yield-curve-lab/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Markkndr/yield-curve-lab/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"></a>
 <img src="https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+">
 <img src="https://img.shields.io/badge/pandas-150458?style=for-the-badge&logo=pandas&logoColor=white" alt="pandas">
 <img src="https://img.shields.io/badge/SciPy-8CAAE6?style=for-the-badge&logo=scipy&logoColor=white" alt="SciPy">
@@ -170,7 +171,7 @@ The full project adds the components below. **None of these are implemented yet.
 | **Data** | pandas, NumPy, PyArrow (Parquet) |
 | **Data source** | FRED via `fredapi`, with a public-CSV fallback when no key is set |
 | **Config** | `python-dotenv` (`.env`) |
-| **Quality** | pytest, ruff |
+| **Quality** | pytest, ruff, GitHub Actions CI (Python 3.11 + 3.14) |
 
 **Planned (roadmap):**
 
@@ -190,7 +191,7 @@ The full project adds the components below. **None of these are implemented yet.
 
 The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 
-- ⚙️ **Project setup:** `pyproject.toml` with a `src/` layout, pytest, ruff, and `.env`-based configuration
+- ⚙️ **Project setup:** `pyproject.toml` with a `src/` layout, pytest, ruff, and `.env`-based configuration; GitHub Actions runs lint and the offline tests on every push and PR
 - 📥 **FRED ingestion:** all 11 constant-maturity Treasury series (`DGS1MO` … `DGS30`), through the API when a key is set, otherwise through FRED's public CSV download
 - 🧹 **Cleaning:**
   - Drops market holidays (dates where every maturity is missing)

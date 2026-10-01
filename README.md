@@ -92,7 +92,7 @@ The yield curve (government bond yields across maturities, from 1 month to 30 ye
 - Diebold-Li AR(1) forecasting vs. random walk, out of sample, **or**
 - PCA-based bond portfolio risk and scenarios
 
-### Phase 6 — 🇭🇺 Hungary vs. US *(optional)*
+### Phase 6 — 🇭🇺 Hungary vs. US
 - Side-by-side PCA comparison of the two curves
 
 ### Phase 7 — 🖥️ Presentation

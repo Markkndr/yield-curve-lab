@@ -123,6 +123,19 @@ def test_maturity_labels_match_series():
     assert years == sorted(years)
 
 
+def test_curve_on_rolls_back_to_last_trading_day():
+    index = pd.to_datetime(["2024-01-04", "2024-01-05", "2024-01-08"])
+    table = pd.DataFrame({"1M": [NAN, 5.0, 5.1], "10Y": [4.0, 4.1, 4.2]}, index=index)
+
+    saturday = data.curve_on(table, "2024-01-06")
+    assert saturday.name == pd.Timestamp("2024-01-05")
+    assert saturday.to_dict() == {"1M": 5.0, "10Y": 4.1}
+
+    assert data.curve_on(table, "2024-01-04").to_dict() == {"10Y": 4.0}  # unissued 1M dropped
+    with pytest.raises(KeyError):
+        data.curve_on(table, "2024-01-03")
+
+
 @pytest.mark.network
 def test_fetch_fred_series_live():
     s = data.fetch_fred_series("DGS10")

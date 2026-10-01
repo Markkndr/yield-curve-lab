@@ -200,6 +200,7 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 - ✔️ **Validation:** sorted, unique dates; known maturity columns; yields within −5% to 30%
 - 💾 **Parquet cache:** 16,000+ trading days from 1962 onward, with the full 1M–30Y curve available from July 2001
 - 🧪 **Tests:** offline unit tests with a fake FRED fetcher, plus a live FRED check behind a `network` marker
+- 🔎 **EDA (Phase 2, in progress):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) and a yield heatmap since 1962, using reusable Plotly helpers in `yieldcurve.plots`
 
 > 📝 Note: Hungarian (ÁKK) yields are not in yet. ÁKK's statistics pages load their data in the browser, so a reliable download source is still being worked out.
 
@@ -213,7 +214,15 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 | `clean_yield_table(raw, max_gap=5)` | Sort, dedupe, drop holidays, fill short gaps |
 | `fill_short_gaps(s, max_gap=5)` | Forward-fill only short gaps that follow a valid value |
 | `validate_yield_table(table)` | Raise `ValueError` if the table breaks the pipeline's rules |
+| `curve_on(table, date)` | The curve on the last trading day on or before `date` (named by the day used) |
 | `MATURITY_YEARS` | Maturity label → years (e.g. `"3M"` → `0.25`), for curve fitting |
+
+### Python API — `yieldcurve.plots`
+
+| Function | Description |
+|----------|-------------|
+| `curve_snapshots(table, dates)` | Curves on several labelled dates, maturity on a log axis |
+| `yield_heatmap(table, freq="ME")` | Time × maturity heatmap of period-average yields |
 
 ---
 
@@ -259,6 +268,14 @@ yields = load_us_yields()      # dates × maturities, in percent
 yields.loc["2022-10-24"]       # the curve on one day
 ```
 
+### Run the notebooks
+
+```bash
+jupyter execute --inplace notebooks/01_eda.ipynb   # re-run top to bottom from the cache
+```
+
+Or open them in VS Code / JupyterLab. Figures are interactive there; a static PNG copy is saved alongside so they also render on GitHub.
+
 ### Run the tests
 
 ```bash
@@ -275,12 +292,15 @@ ruff check .
 yield-curve-lab/
 ├── src/yieldcurve/
 │   ├── config.py          # Project paths and FRED API key loading
-│   └── data.py            # Fetch → clean → validate → Parquet cache
+│   ├── data.py            # Fetch → clean → validate → Parquet cache
+│   └── plots.py           # Plotly figures shared by notebooks and the dashboard
 ├── tests/
 │   ├── test_config.py
-│   └── test_data.py
+│   ├── test_data.py
+│   └── test_plots.py
 ├── data/                  # Parquet cache (git-ignored, rebuilt by the pipeline)
-├── notebooks/             # Analysis notebooks (from Phase 2)
+├── notebooks/
+│   └── 01_eda.ipynb       # Coverage, key-date curves, yield heatmap
 ├── .env.example           # Template for FRED_API_KEY
 ├── pyproject.toml
 └── LICENSE

@@ -32,3 +32,26 @@ def test_yield_heatmap_resamples_and_keeps_gaps():
     assert list(heatmap.y) == ["1M", "2Y", "10Y"]
     assert np.asarray(heatmap.z).shape == (3, 3)  # 3 maturities x Jan-Mar
     assert np.isnan(heatmap.z[0][0])  # 1M blank in January
+
+
+def test_spread_chart_shades_recessions_in_range():
+    s = _table()["10Y"] - _table()["2Y"]
+    recessions = pd.DataFrame(
+        {
+            "start": pd.to_datetime(["2020-03-01", "2024-02-01"]),
+            "end": pd.to_datetime(["2020-04-30", "2024-02-29"]),
+        }
+    )
+    fig = plots.spread_chart({"10Y-2Y": s}, recessions)
+
+    assert [t.name for t in fig.data] == ["10Y-2Y", "NBER recession"]
+    shaded = [shape for shape in fig.layout.shapes if shape.type == "rect"]
+    assert len(shaded) == 1  # the 2020 recession is before the data starts
+
+
+def test_spread_chart_resamples_to_period_closes():
+    s = _table()["10Y"] - _table()["2Y"]
+    fig = plots.spread_chart({"10Y-2Y": s}, freq="W-FRI")
+
+    assert len(fig.data[0].x) == 12  # 60 business days = 12 weeks
+    assert fig.data[0].y[-1] == s.iloc[-1]

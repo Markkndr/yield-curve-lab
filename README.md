@@ -199,7 +199,7 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 - ✔️ **Validation:** sorted, unique dates; known maturity columns; yields within −5% to 30%
 - 💾 **Parquet cache:** 16,000+ trading days from 1962 onward, with the full 1M–30Y curve available from July 2001
 - 🧪 **Tests:** offline unit tests with a fake FRED fetcher, plus a live FRED check behind a `network` marker
-- 🔎 **EDA (Phase 2, in progress):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) and a yield heatmap since 1962, using reusable Plotly helpers in `yieldcurve.plots`
+- 🔎 **EDA (Phase 2, in progress):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) a yield heatmap since 1962, and 10Y–2Y / 10Y–3M inversion episodes against NBER recessions (the 2022–24 10Y–2Y inversion: 2022-07-06 to 2024-09-05, the longest in the sample), using reusable Plotly helpers in `yieldcurve.plots`
 
 > 📝 Note: Hungarian (ÁKK) yields are not in yet. ÁKK's statistics pages load their data in the browser, so a reliable download source is still being worked out.
 
@@ -222,6 +222,15 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 |----------|-------------|
 | `curve_snapshots(table, dates)` | Curves on several labelled dates, maturity on a log axis |
 | `yield_heatmap(table, freq="ME")` | Time × maturity heatmap of period-average yields |
+| `spread_chart(spreads, recessions, freq=None)` | Spreads over time with a zero line and recession shading |
+
+### Python API — `yieldcurve.spreads`
+
+| Function / constant | Description |
+|---------------------|-------------|
+| `spread(table, long="10Y", short="2Y")` | Long minus short yield in percentage points (negative = inverted) |
+| `find_inversions(spread, min_days=10, merge_gap=5)` | Inversion episodes: start, end, trading days, deepest spread and its date, ongoing flag |
+| `recession_periods()` | NBER recessions as start/end dates (FRED shading convention) |
 
 ---
 
@@ -292,14 +301,16 @@ yield-curve-lab/
 ├── src/yieldcurve/
 │   ├── config.py          # Project paths and FRED API key loading
 │   ├── data.py            # Fetch → clean → validate → Parquet cache
-│   └── plots.py           # Plotly figures shared by notebooks and the dashboard
+│   ├── plots.py           # Plotly figures shared by notebooks and the dashboard
+│   └── spreads.py         # Term spreads, inversion episodes, NBER recessions
 ├── tests/
 │   ├── test_config.py
 │   ├── test_data.py
-│   └── test_plots.py
+│   ├── test_plots.py
+│   └── test_spreads.py
 ├── data/                  # Parquet cache (git-ignored, rebuilt by the pipeline)
 ├── notebooks/
-│   └── 01_eda.ipynb       # Coverage, key-date curves, yield heatmap
+│   └── 01_eda.ipynb       # Coverage, key-date curves, heatmap, spreads and inversions
 ├── .env.example           # Template for FRED_API_KEY
 ├── pyproject.toml
 └── LICENSE

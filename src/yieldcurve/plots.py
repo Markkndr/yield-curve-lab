@@ -140,3 +140,66 @@ def yield_heatmap(
         yaxis=dict(title="Maturity", showgrid=False, type="category"),
     )
     return fig
+
+
+def spread_chart(
+    spreads: Mapping[str, pd.Series],
+    recessions: pd.DataFrame | None = None,
+    title: str = "Term spreads",
+    freq: str | None = None,
+) -> go.Figure:
+    """Plot spreads (percentage points) over time with a zero line.
+
+    With `freq` (e.g. "W-FRI"), each spread is plotted at period closes instead
+    of daily, which keeps multi-decade figures light without visible change.
+
+    `recessions` (columns `start`, `end`, e.g. from `spreads.recession_periods()`)
+    are shaded in gray and get their own legend entry.
+    """
+    fig = go.Figure()
+    for label, s in spreads.items():
+        s = s.dropna()
+        if freq is not None:
+            s = s.resample(freq).last().dropna()
+        fig.add_trace(
+            go.Scatter(
+                x=s.index,
+                y=s.to_numpy(),
+                name=label,
+                mode="lines",
+                line=dict(width=2),
+                hovertemplate="%{y:.2f} pp",
+            )
+        )
+    if recessions is not None:
+        start = min(s.first_valid_index() for s in spreads.values())
+        for row in recessions[recessions["end"] >= start].itertuples():
+            fig.add_vrect(
+                x0=row.start,
+                x1=row.end,
+                fillcolor=INK_MUTED,
+                opacity=0.18,
+                line_width=0,
+                layer="below",
+            )
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                name="NBER recession",
+                mode="markers",
+                marker=dict(symbol="square", size=12, color=INK_MUTED, opacity=0.35),
+                hoverinfo="skip",
+            )
+        )
+    fig.add_hline(y=0, line=dict(color=BASELINE, width=1))
+    fig.update_layout(
+        template=TEMPLATE,
+        title=title,
+        hovermode="x unified",
+        xaxis=dict(title=None),
+        yaxis=dict(title="Spread (pp)"),
+        legend=dict(orientation="h", yanchor="top", y=-0.1, x=0),
+        margin=dict(b=90),
+    )
+    return fig

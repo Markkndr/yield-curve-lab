@@ -3,6 +3,14 @@ import pytest
 
 from yieldcurve import nelson_siegel as ns
 
+# The eleven US maturities in months, and an upward-sloping, humped test curve.
+MONTHS = np.array([1, 3, 6, 12, 24, 36, 60, 84, 120, 240, 360], dtype=float)
+BETAS = np.array([5.0, -2.0, 1.5])
+
+
+def _curve(months=MONTHS, betas=BETAS, lam=ns.DIEBOLD_LI_LAMBDA):
+    return ns.ns_loadings(months, lam).to_numpy() @ betas
+
 
 def test_loadings_columns_and_index():
     result = ns.ns_loadings([3, 24, 120])
@@ -49,3 +57,65 @@ def test_nan_maturity_gives_nan_loadings():
 
     assert result.iloc[1][["slope", "curvature"]].isna().all()
     assert result.iloc[0].notna().all()
+
+
+def test_fit_fixed_recovers_betas_from_noiseless_curve():
+    fit = ns.fit_ns_fixed(MONTHS, _curve())
+
+    assert list(fit.betas.index) == ns.FACTOR_COLUMNS
+    np.testing.assert_allclose(fit.betas.to_numpy(), BETAS, rtol=0, atol=1e-10)
+    np.testing.assert_allclose(fit.fitted.to_numpy(), _curve(), atol=1e-10)
+    np.testing.assert_allclose(fit.residuals.to_numpy(), 0.0, atol=1e-10)
+    assert fit.rmse == pytest.approx(0.0, abs=1e-10)
+    assert fit.lam == ns.DIEBOLD_LI_LAMBDA
+    assert fit.fitted.index.tolist() == MONTHS.tolist()
+
+
+@pytest.mark.parametrize("lam", [0.02, 0.0609, 0.2])
+def test_fit_fixed_recovers_betas_at_other_lambdas(lam):
+    fit = ns.fit_ns_fixed(MONTHS, _curve(lam=lam), lam=lam)
+
+    np.testing.assert_allclose(fit.betas.to_numpy(), BETAS, atol=1e-9)
+
+
+def test_fit_fixed_short_rate_and_long_rate_limits():
+    fit = ns.fit_ns_fixed(MONTHS, _curve())
+
+    # y(0) = b0 + b1 and y(infinity) = b0
+    assert fit.betas["level"] + fit.betas["slope"] == pytest.approx(3.0)
+    assert fit.betas["level"] == pytest.approx(5.0)
+
+
+def test_fit_fixed_ignores_missing_yields_and_maturities():
+    yields = _curve()
+    yields[[0, 9]] = np.nan  # 1M and 20Y not quoted
+    months = MONTHS.copy()
+    months[4] = np.nan
+
+    fit = ns.fit_ns_fixed(months, yields)
+
+    np.testing.assert_allclose(fit.betas.to_numpy(), BETAS, atol=1e-10)
+    assert fit.residuals.isna().to_numpy().tolist() == [i in (0, 4, 9) for i in range(11)]
+    # a maturity without a yield still gets a fitted value
+    assert fit.fitted.iloc[0] == pytest.approx(_curve()[0])
+    assert np.isnan(fit.fitted.iloc[4])
+
+
+def test_fit_fixed_matches_least_squares_on_noisy_curve():
+    rng = np.random.default_rng(0)
+    yields = _curve() + 0.05 * rng.standard_normal(len(MONTHS))
+
+    fit = ns.fit_ns_fixed(MONTHS, yields)
+
+    # OLS residuals are orthogonal to every loading
+    X = ns.ns_loadings(MONTHS).to_numpy()
+    np.testing.assert_allclose(X.T @ fit.residuals.to_numpy(), 0.0, atol=1e-10)
+    assert fit.rmse == pytest.approx(np.sqrt(np.mean(fit.residuals**2)))
+    assert 0 < fit.rmse < 0.1
+
+
+def test_fit_fixed_rejects_too_few_points_and_bad_shapes():
+    with pytest.raises(ValueError, match="at least 3"):
+        ns.fit_ns_fixed([3, 24, 120], [4.0, np.nan, 4.5])
+    with pytest.raises(ValueError, match="same length"):
+        ns.fit_ns_fixed([3, 24, 120], [4.0, 4.2])

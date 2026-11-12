@@ -56,3 +56,15 @@ def test_spread_chart_resamples_to_period_closes():
 
     assert len(fig.data[0].x) == 12  # 60 business days = 12 weeks
     assert fig.data[0].y[-1] == s.iloc[-1]
+
+
+def test_yield_history_one_line_per_column_without_gaps():
+    table = _table()[["1M", "10Y"]]
+    fig = plots.yield_history(table)
+
+    assert [t.name for t in fig.data] == ["1M", "10Y"]
+    assert len(fig.data[0].x) == table["1M"].count()  # January NaNs dropped
+    assert fig.data[1].y[-1] == table["10Y"].iloc[-1]
+
+    weekly = plots.yield_history(table, freq="W-FRI")
+    assert len(weekly.data[1].x) == 12

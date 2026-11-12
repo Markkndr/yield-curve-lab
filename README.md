@@ -200,7 +200,7 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 - 💾 **Parquet cache:** 16,000+ trading days from 1962 onward, with the full 1M–30Y curve available from July 2001
 - 🇭🇺 **Hungarian benchmark yields:** ÁKK's daily benchmark yields (3M, 6M, 1Y, 3Y, 5Y, 10Y, 15Y from 2002-01-03; 20Y from 2020-05-20) through the same clean → validate → Parquet steps. There is no 2Y benchmark, so Hungarian slopes use 10Y–3Y or 10Y–3M
 - 🧪 **Tests:** offline unit tests with fake FRED and ÁKK fetchers, plus live checks of both sources behind a `network` marker
-- 🔎 **EDA (Phase 2, in progress):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) a yield heatmap since 1962, and 10Y–2Y / 10Y–3M inversion episodes against NBER recessions (the 2022–24 10Y–2Y inversion: 2022-07-06 to 2024-09-05, the longest in the sample), using reusable Plotly helpers in `yieldcurve.plots`
+- 🔎 **EDA (Phase 2):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) a yield heatmap since 1962, and 10Y–2Y / 10Y–3M inversion episodes against NBER recessions (the 2022–24 10Y–2Y inversion: 2022-07-06 to 2024-09-05, the longest in the sample), and a Hungary 2022–23 case study (long yields peaked on 2022-10-14, the day of the MNB's emergency move; the 10Y–3M inversion reached −685 bp in January 2023, against −189 bp in the US), using reusable Plotly helpers in `yieldcurve.plots`
 
 > 📝 Note: ÁKK has no documented download API. The loader calls the JSON endpoint behind the [benchmark-yields page](https://www.akk.hu/hu/statisztika/hozamok-indexek-forgalmi-adatok/referenciahozamok), which could change without notice, so the Parquet cache is the dependable copy.
 
@@ -227,6 +227,7 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 | `curve_snapshots(table, dates)` | Curves on several labelled dates, maturity on a log axis |
 | `yield_heatmap(table, freq="ME")` | Time × maturity heatmap of period-average yields |
 | `spread_chart(spreads, recessions, freq=None)` | Spreads over time with a zero line and recession shading |
+| `yield_history(table, freq=None)` | One line per maturity column over time |
 
 ### Python API — `yieldcurve.spreads`
 
@@ -317,7 +318,7 @@ yield-curve-lab/
 │   └── test_spreads.py
 ├── data/                  # Parquet cache (git-ignored, rebuilt by the pipeline)
 ├── notebooks/
-│   └── 01_eda.ipynb       # Coverage, key-date curves, heatmap, spreads and inversions
+│   └── 01_eda.ipynb       # Coverage, key-date curves, heatmap, spreads and inversions, Hungary 2022–23
 ├── .env.example           # Template for FRED_API_KEY
 ├── pyproject.toml
 └── LICENSE

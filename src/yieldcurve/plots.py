@@ -203,3 +203,40 @@ def spread_chart(
         margin=dict(b=90),
     )
     return fig
+
+
+def yield_history(
+    table: pd.DataFrame,
+    title: str = "Yields over time",
+    freq: str | None = None,
+) -> go.Figure:
+    """Plot each column of `table` (yields in percent) as a line over time.
+
+    Pass a slice of a yield table, e.g. `table.loc["2021":"2024", ["3M", "10Y"]]`.
+    With `freq` (e.g. "W-FRI"), each series is plotted at period closes.
+    """
+    fig = go.Figure()
+    for label in table.columns:
+        s = table[label].dropna()
+        if freq is not None:
+            s = s.resample(freq).last().dropna()
+        fig.add_trace(
+            go.Scatter(
+                x=s.index,
+                y=s.to_numpy(),
+                name=label,
+                mode="lines",
+                line=dict(width=2),
+                hovertemplate="%{y:.2f}%",
+            )
+        )
+    fig.update_layout(
+        template=TEMPLATE,
+        title=title,
+        hovermode="x unified",
+        xaxis=dict(title=None),
+        yaxis=dict(title="Yield (%)"),
+        legend=dict(orientation="h", yanchor="top", y=-0.1, x=0),
+        margin=dict(b=90),
+    )
+    return fig

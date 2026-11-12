@@ -101,8 +101,8 @@ def curve_snapshots(
         xaxis=dict(
             title="Maturity",
             type="log",
-            tickvals=list(MATURITY_YEARS.values()),
-            ticktext=list(MATURITY_YEARS),
+            tickvals=[MATURITY_YEARS[m] for m in table.columns],
+            ticktext=list(table.columns),
         ),
         yaxis=dict(title="Yield (%)", rangemode="tozero"),
         legend=dict(orientation="h", yanchor="top", y=-0.18, x=0),

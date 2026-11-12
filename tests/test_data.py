@@ -117,10 +117,13 @@ def test_load_us_yields_uses_cache(tmp_path, fake_us_fetch):
     assert fake_us_fetch.calls == 2 * len(data.US_TREASURY_SERIES)
 
 
-def test_maturity_labels_match_series():
-    assert list(data.US_TREASURY_SERIES) == list(data.MATURITY_YEARS)
+def test_maturity_labels_cover_both_markets_in_order():
+    assert set(data.US_TREASURY_SERIES) <= set(data.MATURITY_YEARS)
+    assert set(data.HU_BENCHMARK_TENORS.values()) <= set(data.MATURITY_YEARS)
     years = list(data.MATURITY_YEARS.values())
     assert years == sorted(years)
+    for labels in (list(data.US_TREASURY_SERIES), list(data.HU_BENCHMARK_TENORS.values())):
+        assert labels == sorted(labels, key=data.MATURITY_YEARS.get)
 
 
 def test_curve_on_rolls_back_to_last_trading_day():
@@ -134,6 +137,95 @@ def test_curve_on_rolls_back_to_last_trading_day():
     assert data.curve_on(table, "2024-01-04").to_dict() == {"10Y": 4.0}  # unissued 1M dropped
     with pytest.raises(KeyError):
         data.curve_on(table, "2024-01-03")
+
+
+def _akk_payload(rows, status="OK", message=None):
+    return {
+        "meta": {"function": "getBenchmark", "status": status, "message": message},
+        "data": [
+            {"date": date, "tenor": tenor, "yield": value, "isin": "HU0000000000", "avgBid": 1.0}
+            for date, tenor, value in rows
+        ],
+    }
+
+
+class FakeBenchmarkFetcher:
+    """Stands in for AKK: serves canned long rows by year and records calls."""
+
+    def __init__(self, rows):
+        self.rows = data.read_akk_benchmark(_akk_payload(rows))
+        self.calls = []
+
+    def __call__(self, start, end):
+        self.calls.append((start, end))
+        return self.rows[self.rows["date"].between(start, end)]
+
+
+def test_read_akk_benchmark_keeps_date_tenor_yield():
+    rows = data.read_akk_benchmark(_akk_payload([("2022-10-14", "3Y", 14.38)]))
+
+    assert list(rows.columns) == data.AKK_COLUMNS
+    assert rows.loc[0, "date"] == pd.Timestamp("2022-10-14")
+    assert rows.loc[0, "yield"] == 14.38
+
+
+def test_read_akk_benchmark_handles_empty_and_failed_responses():
+    empty = data.read_akk_benchmark(_akk_payload([]))
+    assert empty.empty
+    assert list(empty.columns) == data.AKK_COLUMNS
+
+    with pytest.raises(ValueError, match="bad date"):
+        data.read_akk_benchmark(_akk_payload([], status="ERROR", message="bad date"))
+
+
+def test_build_hu_yield_table_pivots_and_renames_tenors(caplog):
+    fetch = FakeBenchmarkFetcher(
+        [
+            ("2022-12-30", "10Y", 9.0),
+            ("2022-12-30", "12M", 13.5),
+            ("2023-01-02", "12M", 13.6),
+            ("2023-01-02", "3M", 14.0),
+            ("2023-01-02", "7Y", 9.9),  # not a benchmark tenor we model
+        ]
+    )
+
+    table = data.build_hu_yield_table(fetch, first_year=2022, last_year=2023)
+
+    assert fetch.calls == [("2022-01-01", "2022-12-31"), ("2023-01-01", "2023-12-31")]
+    assert list(table.columns) == list(data.HU_BENCHMARK_TENORS.values())
+    assert table.index.tolist() == list(pd.to_datetime(["2022-12-30", "2023-01-02"]))
+    assert table.loc["2022-12-30", "1Y"] == 13.5  # AKK's 12M is our 1Y
+    assert np.isnan(table.loc["2022-12-30", "3M"])
+    assert "7Y" in caplog.text
+
+
+def test_load_hu_yields_cleans_validates_and_caches(tmp_path, monkeypatch):
+    monkeypatch.setattr(data, "HU_FIRST_YEAR", 2024)
+    days = pd.bdate_range("2024-01-01", periods=5).strftime("%Y-%m-%d")
+    fetch = FakeBenchmarkFetcher(
+        [(day, tenor, 6.0 + i / 10) for day in days for i, tenor in enumerate(["3M", "5Y", "10Y"])]
+    )
+    cache = tmp_path / "hu.parquet"
+
+    first = data.load_hu_yields(cache_path=cache, fetch=fetch)
+    calls_after_first = len(fetch.calls)
+    second = data.load_hu_yields(cache_path=cache, fetch=fetch)
+
+    assert cache.exists()
+    assert len(fetch.calls) == calls_after_first  # second call hit the cache
+    pd.testing.assert_frame_equal(first, second, check_freq=False)
+    assert first.index.name == "date"
+    assert len(first) == 5
+    assert first["20Y"].isna().all()  # never quoted: stays missing, not filled
+    data.validate_yield_table(first)
+
+
+@pytest.mark.network
+def test_fetch_akk_benchmark_live():
+    rows = data.fetch_akk_benchmark("2022-10-10", "2022-10-14")
+    assert rows["date"].nunique() == 5
+    assert set(rows["tenor"]) <= set(data.HU_BENCHMARK_TENORS)
+    assert rows["yield"].between(*data.YIELD_BOUNDS).all()
 
 
 @pytest.mark.network

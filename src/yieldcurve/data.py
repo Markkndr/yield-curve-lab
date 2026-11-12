@@ -4,9 +4,13 @@ Yields are kept in percent, as published. Columns are maturity labels ordered
 from shortest to longest; use `MATURITY_YEARS` to map them to year fractions.
 """
 
+import json
 import logging
+import sys
+import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 import fredapi
 import pandas as pd
@@ -41,6 +45,7 @@ MATURITY_YEARS: dict[str, float] = {
     "5Y": 5.0,
     "7Y": 7.0,
     "10Y": 10.0,
+    "15Y": 15.0,
     "20Y": 20.0,
     "30Y": 30.0,
 }
@@ -48,6 +53,31 @@ MATURITY_YEARS: dict[str, float] = {
 US_CACHE_PATH = DATA_DIR / "us_treasury_yields.parquet"
 
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+
+# AKK (Hungarian Government Debt Management Agency) daily benchmark yields:
+# the tenor labels AKK publishes, mapped to this project's maturity labels.
+# There is no 2Y benchmark, and the 20Y only exists in recent years.
+HU_BENCHMARK_TENORS: dict[str, str] = {
+    "3M": "3M",
+    "6M": "6M",
+    "12M": "1Y",
+    "3Y": "3Y",
+    "5Y": "5Y",
+    "10Y": "10Y",
+    "15Y": "15Y",
+    "20Y": "20Y",
+}
+
+HU_CACHE_PATH = DATA_DIR / "hu_benchmark_yields.parquet"
+
+# The JSON endpoint behind akk.hu's benchmark-yields page. It is not a
+# documented public API, so the Parquet cache is the dependable copy.
+AKK_BENCHMARK_URL = (
+    "https://www.akk.hu/api/data/xpose3-dwh/data?query=getBenchmark&dateStart={start}&dateEnd={end}"
+)
+HU_FIRST_YEAR = 2002  # AKK's benchmark history starts on 2002-01-03
+AKK_TIMEOUT_SECONDS = 60
+AKK_COLUMNS = ["date", "tenor", "yield"]
 
 # Longest run of missing days (after dropping market holidays) that gets
 # forward-filled. Longer runs are structural (series not issued) and stay NaN.
@@ -57,6 +87,8 @@ MAX_FILL_GAP = 5
 YIELD_BOUNDS = (-5.0, 30.0)
 
 Fetcher = Callable[[str], pd.Series]
+# Takes ISO start and end dates, returns long rows with `AKK_COLUMNS`.
+BenchmarkFetcher = Callable[[str, str], pd.DataFrame]
 
 
 def read_fred_csv(source: str | Path) -> pd.Series:
@@ -135,16 +167,59 @@ def curve_on(table: pd.DataFrame, date: str | pd.Timestamp) -> pd.Series:
     return table.iloc[pos].dropna().rename(table.index[pos])
 
 
-def load_us_yields(
-    refresh: bool = False,
-    cache_path: Path = US_CACHE_PATH,
-    fetch: Fetcher = fetch_fred_series,
+def read_akk_benchmark(payload: Mapping[str, Any]) -> pd.DataFrame:
+    """Parse an AKK `getBenchmark` JSON response into long rows (`AKK_COLUMNS`).
+
+    AKK quotes one benchmark security per tenor per day; `yield` is its
+    benchmark yield in percent.
+    """
+    meta = payload.get("meta", {})
+    if meta.get("status") != "OK":
+        raise ValueError(f"AKK request failed: {meta.get('message') or meta.get('status')}")
+    rows = pd.DataFrame(payload.get("data", []), columns=AKK_COLUMNS)
+    rows["date"] = pd.to_datetime(rows["date"])
+    rows["yield"] = rows["yield"].astype(float)
+    return rows
+
+
+def fetch_akk_benchmark(start: str, end: str) -> pd.DataFrame:
+    """Fetch AKK benchmark yields for the dates `start`..`end` (ISO, inclusive)."""
+    url = AKK_BENCHMARK_URL.format(start=start, end=end)
+    with urllib.request.urlopen(url, timeout=AKK_TIMEOUT_SECONDS) as response:
+        return read_akk_benchmark(json.load(response))
+
+
+def build_hu_yield_table(
+    fetch: BenchmarkFetcher = fetch_akk_benchmark,
+    first_year: int = HU_FIRST_YEAR,
+    last_year: int | None = None,
 ) -> pd.DataFrame:
-    """Return the clean US Treasury table, using the Parquet cache when present."""
+    """Fetch AKK benchmark yields one calendar year at a time and pivot them
+    into a raw `dates x maturities` table. Tenors this project does not model
+    are dropped with a warning."""
+    if last_year is None:
+        last_year = pd.Timestamp.today().year
+    rows = pd.concat(
+        [fetch(f"{year}-01-01", f"{year}-12-31") for year in range(first_year, last_year + 1)],
+        ignore_index=True,
+    )
+    unknown = set(rows["tenor"].dropna()) - set(HU_BENCHMARK_TENORS)
+    if unknown:
+        logger.warning("Dropping unknown AKK tenors: %s", sorted(unknown))
+    wide = rows.pivot_table(index="date", columns="tenor", values="yield", aggfunc="last")
+    wide = wide.reindex(columns=list(HU_BENCHMARK_TENORS)).rename(columns=HU_BENCHMARK_TENORS)
+    wide.columns.name = None
+    return wide
+
+
+def _load_cached(
+    cache_path: Path, refresh: bool, build: Callable[[], pd.DataFrame]
+) -> pd.DataFrame:
+    """Read the Parquet cache, or build, clean, validate and cache the table."""
     if cache_path.exists() and not refresh:
         return pd.read_parquet(cache_path)
 
-    table = clean_yield_table(build_yield_table(US_TREASURY_SERIES, fetch))
+    table = clean_yield_table(build())
     validate_yield_table(table)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     table.to_parquet(cache_path)
@@ -152,8 +227,30 @@ def load_us_yields(
     return table
 
 
+def load_us_yields(
+    refresh: bool = False,
+    cache_path: Path = US_CACHE_PATH,
+    fetch: Fetcher = fetch_fred_series,
+) -> pd.DataFrame:
+    """Return the clean US Treasury table, using the Parquet cache when present."""
+    return _load_cached(cache_path, refresh, lambda: build_yield_table(US_TREASURY_SERIES, fetch))
+
+
+def load_hu_yields(
+    refresh: bool = False,
+    cache_path: Path = HU_CACHE_PATH,
+    fetch: BenchmarkFetcher = fetch_akk_benchmark,
+) -> pd.DataFrame:
+    """Return the clean Hungarian benchmark table, using the Parquet cache when present."""
+    return _load_cached(cache_path, refresh, lambda: build_hu_yield_table(fetch))
+
+
 if __name__ == "__main__":
+    # `python -m yieldcurve.data` refreshes both caches; pass `us` or `hu` for one.
     logging.basicConfig(level=logging.INFO)
-    yields = load_us_yields(refresh=True)
-    print(yields.tail())
-    print(yields.notna().sum().rename("observations"))
+    loaders = {"us": load_us_yields, "hu": load_hu_yields}
+    for market in sys.argv[1:] or list(loaders):
+        yields = loaders[market](refresh=True)
+        print(f"== {market.upper()}")
+        print(yields.tail())
+        print(yields.notna().sum().rename("observations"))

@@ -130,7 +130,7 @@ The yield curve (government bond yields across maturities, from 1 month to 30 ye
 
 ### Current architecture
 
-What runs today is the **data pipeline**: a single Python module that fetches every Treasury maturity from FRED, aligns and cleans them, validates the result, and caches it as Parquet. Later analysis reads the cached table instead of calling FRED again.
+What runs today is the **data pipeline**: a single Python module that fetches every Treasury maturity from FRED, aligns and cleans them, validates the result, and caches it as Parquet. Later analysis reads the cached table instead of calling FRED again. Hungarian benchmark yields from ÁKK go through the same clean, validate and cache steps into `data/hu_benchmark_yields.parquet` (`load_hu_yields()`).
 
 ```
   FRED  ──►  fetch_fred_series  ──►  build_yield_table  ──►  clean_yield_table  ──►  validate_yield_table
@@ -144,7 +144,6 @@ What runs today is the **data pipeline**: a single Python module that fetches ev
 
 The full project adds the components below. **None of these are implemented yet.** They describe the roadmap, not the current build.
 
-- **Hungarian data source:** ÁKK benchmark yields through the same clean-and-cache pipeline
 - **Analysis modules:** Nelson-Siegel fitting, PCA, and forecasting as tested library code, with notebooks on top
 - **Document index:** Fed and MNB statements embedded into Chroma
 - **Agent:** a LangGraph loop calling analysis tools and the retriever
@@ -169,7 +168,7 @@ The full project adds the components below. **None of these are implemented yet.
 |-------|-----------|
 | **Language** | Python 3.11+ (developed on 3.14) |
 | **Data** | pandas, NumPy, PyArrow (Parquet) |
-| **Data source** | FRED via `fredapi`, with a public-CSV fallback when no key is set |
+| **Data source** | FRED via `fredapi`, with a public-CSV fallback when no key is set; ÁKK benchmark yields over HTTPS (standard library) |
 | **Config** | `python-dotenv` (`.env`) |
 | **Quality** | pytest, ruff, GitHub Actions CI (Python 3.11 + 3.14) |
 
@@ -199,16 +198,20 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
   - Leaves structural gaps missing: the 20Y was not issued in 1987–1993, and the 1M only starts in 2001
 - ✔️ **Validation:** sorted, unique dates; known maturity columns; yields within −5% to 30%
 - 💾 **Parquet cache:** 16,000+ trading days from 1962 onward, with the full 1M–30Y curve available from July 2001
-- 🧪 **Tests:** offline unit tests with a fake FRED fetcher, plus a live FRED check behind a `network` marker
+- 🇭🇺 **Hungarian benchmark yields:** ÁKK's daily benchmark yields (3M, 6M, 1Y, 3Y, 5Y, 10Y, 15Y from 2002-01-03; 20Y from 2020-05-20) through the same clean → validate → Parquet steps. There is no 2Y benchmark, so Hungarian slopes use 10Y–3Y or 10Y–3M
+- 🧪 **Tests:** offline unit tests with fake FRED and ÁKK fetchers, plus live checks of both sources behind a `network` marker
 - 🔎 **EDA (Phase 2, in progress):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) a yield heatmap since 1962, and 10Y–2Y / 10Y–3M inversion episodes against NBER recessions (the 2022–24 10Y–2Y inversion: 2022-07-06 to 2024-09-05, the longest in the sample), using reusable Plotly helpers in `yieldcurve.plots`
 
-> 📝 Note: Hungarian (ÁKK) yields are not in yet. ÁKK's statistics pages load their data in the browser, so a reliable download source is still being worked out.
+> 📝 Note: ÁKK has no documented download API. The loader calls the JSON endpoint behind the [benchmark-yields page](https://www.akk.hu/hu/statisztika/hozamok-indexek-forgalmi-adatok/referenciahozamok), which could change without notice, so the Parquet cache is the dependable copy.
 
 ### Python API — `yieldcurve.data`
 
 | Function / constant | Description |
 |---------------------|-------------|
 | `load_us_yields(refresh=False)` | The clean US Treasury table, served from the Parquet cache when present |
+| `load_hu_yields(refresh=False)` | The clean Hungarian benchmark table (ÁKK), served from the Parquet cache when present |
+| `fetch_akk_benchmark(start, end)` | ÁKK benchmark yields for a date range as long `date`, `tenor`, `yield` rows |
+| `build_hu_yield_table(fetch)` | Fetch ÁKK year by year and pivot into a raw `dates × maturities` table |
 | `fetch_fred_series(series_id)` | One FRED series via the API, or the public CSV if no key is set |
 | `build_yield_table(series, fetch)` | Fetch and align several series into a raw table |
 | `clean_yield_table(raw, max_gap=5)` | Sort, dedupe, drop holidays, fill short gaps |
@@ -267,14 +270,17 @@ cp .env.example .env
 ### Build the data cache
 
 ```bash
-python -m yieldcurve.data      # downloads all series and writes data/us_treasury_yields.parquet
+python -m yieldcurve.data      # downloads both markets into data/*.parquet
+python -m yieldcurve.data hu   # or just one: us | hu
 ```
 
 ```python
-from yieldcurve.data import load_us_yields
+from yieldcurve.data import load_hu_yields, load_us_yields
 
 yields = load_us_yields()      # dates × maturities, in percent
 yields.loc["2022-10-24"]       # the curve on one day
+
+hu = load_hu_yields()          # same shape, Hungarian benchmark yields
 ```
 
 ### Run the notebooks
@@ -289,7 +295,7 @@ Or open them in VS Code / JupyterLab. Figures are interactive there; a static PN
 
 ```bash
 pytest                         # offline tests
-pytest -m network              # live FRED check
+pytest -m network              # live FRED and ÁKK checks
 ruff check .
 ```
 

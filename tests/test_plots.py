@@ -23,6 +23,7 @@ def test_curve_snapshots_one_trace_per_date_with_rolled_back_label():
     assert [t.name for t in fig.data] == ["Start (2024-01-05)", "Later (2024-03-01)"]
     assert list(fig.data[0].customdata) == ["2Y", "10Y"]  # unissued 1M dropped
     assert list(fig.data[1].x) == [1 / 12, 2.0, 10.0]
+    assert list(fig.layout.xaxis.ticktext) == ["1M", "2Y", "10Y"]  # only the table's maturities
 
 
 def test_yield_heatmap_resamples_and_keeps_gaps():

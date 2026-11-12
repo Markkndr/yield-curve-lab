@@ -169,6 +169,8 @@ The full project adds the components below. **None of these are implemented yet.
 | **Language** | Python 3.11+ (developed on 3.14) |
 | **Data** | pandas, NumPy, PyArrow (Parquet) |
 | **Data source** | FRED via `fredapi`, with a public-CSV fallback when no key is set; ÁKK benchmark yields over HTTPS (standard library) |
+| **Modeling** | NumPy least squares and SciPy (bounded scalar optimization) for Nelson-Siegel |
+| **Visualization** | Plotly |
 | **Config** | `python-dotenv` (`.env`) |
 | **Quality** | pytest, ruff, GitHub Actions CI (Python 3.11 + 3.14) |
 
@@ -176,19 +178,19 @@ The full project adds the components below. **None of these are implemented yet.
 
 | Layer | Technology |
 |-------|-----------|
-| **Modeling** | SciPy (optimization), scikit-learn (PCA), statsmodels (AR models) |
-| **Visualization** | Plotly, Streamlit |
+| **Modeling** | scikit-learn (PCA), statsmodels (AR models) |
+| **Visualization** | Streamlit |
 | **GenAI** | LangChain, LangGraph, an LLM provider SDK, Chroma |
 | **Serving** | FastAPI, Uvicorn, Docker Compose |
 | **Observability & eval** | Langfuse, GitHub Actions |
 
-> The modeling and plotting libraries are already installed with the project, but no analysis modules use them yet.
+> scikit-learn and statsmodels are already installed with the project, but no module uses them yet.
 
 ---
 
 ## ✅ Current Status
 
-The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
+Phases 0 to 3 are in place: the data pipeline for both markets, the exploratory analysis, and Nelson-Siegel fitting. Implemented so far:
 
 - ⚙️ **Project setup:** `pyproject.toml` with a `src/` layout, pytest, ruff, and `.env`-based configuration; GitHub Actions runs lint and the offline tests on every push and PR
 - 📥 **FRED ingestion:** all 11 constant-maturity Treasury series (`DGS1MO` … `DGS30`), through the API when a key is set, otherwise through FRED's public CSV download
@@ -200,7 +202,11 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 - 💾 **Parquet cache:** 16,000+ trading days from 1962 onward, with the full 1M–30Y curve available from July 2001
 - 🇭🇺 **Hungarian benchmark yields:** ÁKK's daily benchmark yields (3M, 6M, 1Y, 3Y, 5Y, 10Y, 15Y from 2002-01-03; 20Y from 2020-05-20) through the same clean → validate → Parquet steps. There is no 2Y benchmark, so Hungarian slopes use 10Y–3Y or 10Y–3M
 - 🧪 **Tests:** offline unit tests with fake FRED and ÁKK fetchers, plus live checks of both sources behind a `network` marker
-- 📐 **Nelson-Siegel (Phase 3, in progress):** factor loadings, a fixed-λ OLS fit (`fit_ns_fixed`) and an optimized-λ fit (`fit_ns`), tested by recovering known betas and λ from synthetic curves
+- 📐 **Nelson-Siegel (Phase 3):** factor loadings, a fixed-λ OLS fit and an optimized-λ fit written from scratch and tested by recovering known betas and λ from synthetic curves. [`notebooks/02_nelson_siegel.ipynb`](notebooks/02_nelson_siegel.ipynb) fits all 6,290 trading days since 2001-07-31:
+  - Median RMSE is 9.5 bp with the Diebold-Li λ and 4.7 bp with λ optimized each day
+  - The worst fits are bill-market dislocations (April 2023, August 2007), the zero-rate years 2011–13, and the inverted curves of 2022–23
+  - Residuals are systematic: a wave of about ±10 bp along the curve, including a persistent 20Y kink
+  - The slope and curvature factors match their empirical proxies (correlations 0.996 and 0.979); the level factor tracks the 30Y yield (0.99), not the 3M/2Y/10Y average (0.60)
 - 🔎 **EDA (Phase 2):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) a yield heatmap since 1962, and 10Y–2Y / 10Y–3M inversion episodes against NBER recessions (the 2022–24 10Y–2Y inversion: 2022-07-06 to 2024-09-05, the longest in the sample), and a Hungary 2022–23 case study (long yields peaked on 2022-10-14, the day of the MNB's emergency move; the 10Y–3M inversion reached −685 bp in January 2023, against −189 bp in the US), using reusable Plotly helpers in `yieldcurve.plots`
 
 > 📝 Note: ÁKK has no documented download API. The loader calls the JSON endpoint behind the [benchmark-yields page](https://www.akk.hu/hu/statisztika/hozamok-indexek-forgalmi-adatok/referenciahozamok), which could change without notice, so the Parquet cache is the dependable copy.
@@ -229,6 +235,8 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 | `yield_heatmap(table, freq="ME")` | Time × maturity heatmap of period-average yields |
 | `spread_chart(spreads, recessions, freq=None)` | Spreads over time with a zero line and recession shading |
 | `yield_history(table, freq=None)` | One line per maturity column over time |
+| `line_chart(series, title, y_title)` | Named time series as lines, for measures that are not yields (RMSE, factors) |
+| `curve_fit(observed, fits)` | One day's observed yields as markers with fitted curves as lines |
 
 ### Python API — `yieldcurve.spreads`
 
@@ -247,6 +255,11 @@ Maturities are in months, as in Diebold and Li (2006).
 | `ns_loadings(maturities, lam=0.0609)` | Level, slope and curvature loadings for each maturity |
 | `fit_ns_fixed(maturities, yields, lam=0.0609)` | OLS fit of the three betas with λ fixed; returns an `NSFit` (betas, λ, fitted curve, residuals, `rmse`) |
 | `fit_ns(maturities, yields, bounds=(0.01, 0.6))` | Also optimizes λ: log-spaced grid, then a bounded SciPy refinement, with OLS betas at every step. Never fits worse than the fixed-λ fit |
+| `fit_ns_daily(table, lam=0.0609)` | Fit every trading day of a yield table (`lam=None` optimizes λ per day): betas, λ, RMSE in bp, points fitted |
+| `fitted_yields(factors, labels)` | Rebuild the fitted curves from a daily fit table, e.g. to get residuals per maturity |
+| `ns_curve(maturities, betas, lam)` | Evaluate the model curve for given betas and λ |
+| `load_ns_factors(refresh=False)` | Daily fixed-λ fits of the US curve since 2001-07-31, served from `data/us_ns_factors.parquet` |
+| `get_ns_factors(date)` | The fit on the last trading day on or before `date` |
 | `DIEBOLD_LI_LAMBDA` | 0.0609, which puts the curvature loading's peak near 30 months |
 
 ---
@@ -285,6 +298,7 @@ cp .env.example .env
 ```bash
 python -m yieldcurve.data      # downloads both markets into data/*.parquet
 python -m yieldcurve.data hu   # or just one: us | hu
+python -m yieldcurve.nelson_siegel   # daily Nelson-Siegel fits into data/us_ns_factors.parquet
 ```
 
 ```python
@@ -300,6 +314,7 @@ hu = load_hu_yields()          # same shape, Hungarian benchmark yields
 
 ```bash
 jupyter execute --inplace notebooks/01_eda.ipynb   # re-run top to bottom from the cache
+jupyter execute --inplace notebooks/02_nelson_siegel.ipynb
 ```
 
 Or open them in VS Code / JupyterLab. Figures are interactive there; a static PNG copy is saved alongside so they also render on GitHub.
@@ -328,7 +343,8 @@ yield-curve-lab/
 ├── tests/                 # One test module per source module
 ├── data/                  # Parquet cache (git-ignored, rebuilt by the pipeline)
 ├── notebooks/
-│   └── 01_eda.ipynb       # Coverage, key-date curves, heatmap, spreads and inversions, Hungary 2022–23
+│   ├── 01_eda.ipynb       # Coverage, key-date curves, heatmap, spreads and inversions, Hungary 2022–23
+│   └── 02_nelson_siegel.ipynb  # Loadings, daily fits, fit error, factors vs. empirical proxies
 ├── .env.example           # Template for FRED_API_KEY
 ├── pyproject.toml
 └── LICENSE

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from yieldcurve import nelson_siegel as ns
@@ -167,3 +168,104 @@ def test_fit_rejects_too_few_points_and_bad_bounds():
         ns.fit_ns([3, 24, 120], [4.0, 4.2, 4.5])
     with pytest.raises(ValueError, match="bounds"):
         ns.fit_ns(MONTHS, _curve(), bounds=(0.5, 0.1))
+
+
+LABELS = ["3M", "6M", "1Y", "2Y", "5Y", "10Y", "30Y"]
+
+
+def _daily_table(lam=ns.DIEBOLD_LI_LAMBDA):
+    """Five days of synthetic curves whose betas drift, and the betas used."""
+    index = pd.bdate_range("2024-01-01", periods=5, name="date")
+    betas = pd.DataFrame(
+        {"level": np.linspace(4, 5, 5), "slope": np.linspace(-2, 1, 5), "curvature": 1.0},
+        index=index,
+    )
+    months = ns.maturity_months(LABELS)
+    curves = betas.to_numpy() @ ns.ns_loadings(months, lam).to_numpy().T
+    return pd.DataFrame(curves, index=index, columns=LABELS), betas
+
+
+def test_maturity_months_converts_labels():
+    assert ns.maturity_months(["1M", "3M", "2Y", "10Y"]).tolist() == pytest.approx([1, 3, 24, 120])
+
+
+def test_fit_daily_recovers_betas_for_every_day():
+    table, betas = _daily_table()
+
+    daily = ns.fit_ns_daily(table)
+
+    assert list(daily.columns) == ns.DAILY_FIT_COLUMNS
+    assert daily.index.equals(table.index)
+    np.testing.assert_allclose(daily[ns.FACTOR_COLUMNS].to_numpy(), betas.to_numpy(), atol=1e-9)
+    assert (daily["lam"] == ns.DIEBOLD_LI_LAMBDA).all()
+    assert daily["rmse_bp"].max() < 1e-6
+    assert (daily["n_points"] == len(LABELS)).all()
+
+
+def test_fit_daily_handles_missing_maturities_and_skips_thin_days():
+    table, betas = _daily_table()
+    table.loc[table.index[1], "30Y"] = np.nan  # one maturity missing: still fitted
+    table.loc[table.index[3], LABELS[2:]] = np.nan  # two points left: skipped
+
+    daily = ns.fit_ns_daily(table)
+
+    assert daily.index.tolist() == table.index[[0, 1, 2, 4]].tolist()
+    assert daily.loc[table.index[1], "n_points"] == len(LABELS) - 1
+    np.testing.assert_allclose(
+        daily.loc[table.index[1], ns.FACTOR_COLUMNS].to_numpy(dtype=float),
+        betas.iloc[1].to_numpy(),
+        atol=1e-9,
+    )
+
+
+def test_fit_daily_with_optimized_lambda_recovers_it():
+    table, betas = _daily_table(lam=0.1)
+
+    daily = ns.fit_ns_daily(table, lam=None)
+
+    np.testing.assert_allclose(daily["lam"].to_numpy(), 0.1, rtol=1e-4)
+    np.testing.assert_allclose(daily[ns.FACTOR_COLUMNS].to_numpy(), betas.to_numpy(), atol=1e-3)
+
+
+def test_fitted_yields_rebuilds_the_curves():
+    table, _ = _daily_table()
+    daily = ns.fit_ns_daily(table)
+
+    fitted = ns.fitted_yields(daily, LABELS)
+
+    pd.testing.assert_frame_equal(fitted, table, check_freq=False, atol=1e-9)
+
+
+def test_load_ns_factors_fits_full_curve_era_and_caches(tmp_path):
+    table, _ = _daily_table()
+    early = table.copy()
+    early.index = pd.bdate_range("2001-07-02", periods=5, name="date")  # before the 1M exists
+    yields = pd.concat([early, table])
+    cache = tmp_path / "ns.parquet"
+
+    first = ns.load_ns_factors(cache_path=cache, yields=yields)
+    second = ns.load_ns_factors(cache_path=cache, yields=yields.iloc[:0])  # served from cache
+
+    assert cache.exists()
+    assert first.index.min() == table.index[0]  # nothing before FULL_CURVE_START
+    pd.testing.assert_frame_equal(first, second, check_freq=False)
+
+
+def test_get_ns_factors_rolls_back_to_last_trading_day():
+    table, betas = _daily_table()  # Mon 2024-01-01 .. Fri 2024-01-05
+    daily = ns.fit_ns_daily(table)
+
+    saturday = ns.get_ns_factors("2024-01-06", daily)
+
+    assert saturday.name == pd.Timestamp("2024-01-05")
+    assert saturday["level"] == pytest.approx(betas["level"].iloc[-1])
+    assert list(saturday.index) == ns.DAILY_FIT_COLUMNS
+    with pytest.raises(KeyError):
+        ns.get_ns_factors("2023-12-29", daily)
+
+
+def test_ns_curve_evaluates_the_model():
+    curve = ns.ns_curve(MONTHS, BETAS)
+
+    np.testing.assert_allclose(curve.to_numpy(), _curve())
+    assert curve.index.tolist() == MONTHS.tolist()

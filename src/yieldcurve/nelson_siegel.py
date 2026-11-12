@@ -7,12 +7,19 @@ Following Diebold and Li (2006), maturities `tau` are in months and lam is
 fixed at 0.0609, which puts the peak of the curvature loading at 30 months.
 """
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
+
+from yieldcurve.config import DATA_DIR
+from yieldcurve.data import MATURITY_YEARS, load_us_yields
+
+logger = logging.getLogger(__name__)
 
 DIEBOLD_LI_LAMBDA = 0.0609
 
@@ -24,6 +31,12 @@ LAMBDA_BOUNDS = (0.01, 0.6)
 LAMBDA_GRID_SIZE = 60
 
 FACTOR_COLUMNS = ["level", "slope", "curvature"]
+# Columns of a daily fit table: the betas, the lam used, and the fit quality.
+DAILY_FIT_COLUMNS = [*FACTOR_COLUMNS, "lam", "rmse_bp", "n_points"]
+
+# The 1M Treasury starts on this day, so every US maturity exists from here on.
+FULL_CURVE_START = "2001-07-31"
+US_NS_FACTORS_PATH = DATA_DIR / "us_ns_factors.parquet"
 
 
 @dataclass(frozen=True)
@@ -154,3 +167,99 @@ def fit_ns(
     )
     lam = refined.x if refined.fun < sse[best] else grid[best]
     return fit_ns_fixed(maturities, yields, lam)
+
+
+def maturity_months(labels: Sequence[str]) -> np.ndarray:
+    """Maturity labels such as "3M" or "10Y" as months, the unit the model uses."""
+    return np.array([MATURITY_YEARS[label] * 12 for label in labels])
+
+
+def fit_ns_daily(table: pd.DataFrame, lam: float | None = DIEBOLD_LI_LAMBDA) -> pd.DataFrame:
+    """Fit every row (trading day) of a `dates x maturities` yield table.
+
+    With a number for `lam` each day is fitted by `fit_ns_fixed`; with
+    `lam=None` each day gets its own optimized lam from `fit_ns`. Yields are
+    expected in percent. Returns one row per day with `DAILY_FIT_COLUMNS`:
+    the three betas, the lam used, the RMSE in basis points and the number of
+    maturities fitted. Days with too few quoted maturities are left out.
+    """
+    months = maturity_months(table.columns)
+    rows, dates = [], []
+    for date, yields in zip(table.index, table.to_numpy(dtype=float), strict=True):
+        try:
+            fit = fit_ns(months, yields) if lam is None else fit_ns_fixed(months, yields, lam)
+        except ValueError:
+            continue  # not enough maturities quoted that day
+        n_points = int(fit.residuals.notna().sum())
+        rows.append([*fit.betas, fit.lam, fit.rmse * 100, n_points])
+        dates.append(date)
+    result = pd.DataFrame(rows, columns=DAILY_FIT_COLUMNS, index=pd.Index(dates, name="date"))
+    return result.astype({"n_points": int})
+
+
+def fitted_yields(factors: pd.DataFrame, labels: Sequence[str]) -> pd.DataFrame:
+    """Rebuild the fitted curve for each day of a daily fit table.
+
+    `factors` needs the three beta columns and `lam`; `labels` are the maturity
+    columns to evaluate. Subtract the result from the observed table to get
+    residuals per maturity.
+    """
+    months = maturity_months(labels)
+    betas = factors[FACTOR_COLUMNS].to_numpy()
+    curves = [
+        _loadings_matrix(months, lam) @ beta
+        for lam, beta in zip(factors["lam"], betas, strict=True)
+    ]
+    return pd.DataFrame(curves, index=factors.index, columns=list(labels))
+
+
+def ns_curve(
+    maturities: Sequence[float] | np.ndarray,
+    betas: Sequence[float] | pd.Series,
+    lam: float = DIEBOLD_LI_LAMBDA,
+) -> pd.Series:
+    """Evaluate the model curve at `maturities` (in months) for given betas and lam."""
+    loadings = ns_loadings(maturities, lam)
+    return pd.Series(loadings.to_numpy() @ np.asarray(betas, dtype=float), index=loadings.index)
+
+
+def load_ns_factors(
+    refresh: bool = False,
+    cache_path: Path = US_NS_FACTORS_PATH,
+    yields: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Return daily fixed-lam fits of the US curve, using the Parquet cache when present.
+
+    Fits every trading day from `FULL_CURVE_START` with the Diebold-Li lam.
+    `yields` defaults to the cached US table; `refresh=True` refits it.
+    """
+    if cache_path.exists() and not refresh:
+        return pd.read_parquet(cache_path)
+
+    table = load_us_yields() if yields is None else yields
+    factors = fit_ns_daily(table.loc[FULL_CURVE_START:])
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    factors.to_parquet(cache_path)
+    logger.info("Cached %d daily fits to %s", len(factors), cache_path)
+    return factors
+
+
+def get_ns_factors(date: str | pd.Timestamp, factors: pd.DataFrame | None = None) -> pd.Series:
+    """Return the fit for the last trading day on or before `date`.
+
+    The Series is named by the trading day actually used, like `data.curve_on`.
+    `factors` defaults to `load_ns_factors()`.
+    """
+    table = load_ns_factors() if factors is None else factors
+    target = pd.Timestamp(date)
+    pos = table.index.searchsorted(target, side="right") - 1
+    if pos < 0:
+        raise KeyError(f"no Nelson-Siegel fit on or before {target.date()}")
+    return table.iloc[pos].rename(table.index[pos])
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    daily = load_ns_factors(refresh=True)
+    print(daily.tail())
+    print(daily["rmse_bp"].describe())

@@ -119,3 +119,51 @@ def test_fit_fixed_rejects_too_few_points_and_bad_shapes():
         ns.fit_ns_fixed([3, 24, 120], [4.0, np.nan, 4.5])
     with pytest.raises(ValueError, match="same length"):
         ns.fit_ns_fixed([3, 24, 120], [4.0, 4.2])
+
+
+@pytest.mark.parametrize("lam", [0.015, 0.04, 0.0609, 0.15, 0.4])
+def test_fit_recovers_lambda_and_betas_from_noiseless_curve(lam):
+    fit = ns.fit_ns(MONTHS, _curve(lam=lam))
+
+    assert fit.lam == pytest.approx(lam, rel=1e-5)
+    np.testing.assert_allclose(fit.betas.to_numpy(), BETAS, atol=1e-4)
+    assert fit.rmse < 1e-7
+
+
+def test_fit_recovers_lambda_with_missing_maturities():
+    yields = _curve(lam=0.09)
+    yields[[0, 5, 9]] = np.nan  # 1M, 3Y and 20Y not quoted
+
+    fit = ns.fit_ns(MONTHS, yields)
+
+    assert fit.lam == pytest.approx(0.09, rel=1e-5)
+    np.testing.assert_allclose(fit.betas.to_numpy(), BETAS, atol=1e-4)
+    assert fit.residuals.isna().sum() == 3
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_fit_never_worse_than_fixed_lambda(seed):
+    rng = np.random.default_rng(seed)
+    betas = rng.normal([4.0, -1.0, 0.0], [2.0, 2.0, 3.0])
+    yields = _curve(betas=betas, lam=rng.uniform(0.02, 0.5))
+    yields += 0.1 * rng.standard_normal(len(MONTHS))
+
+    optimized = ns.fit_ns(MONTHS, yields)
+    fixed = ns.fit_ns_fixed(MONTHS, yields)
+
+    assert optimized.rmse <= fixed.rmse
+    assert ns.LAMBDA_BOUNDS[0] <= optimized.lam <= ns.LAMBDA_BOUNDS[1]
+
+
+def test_fit_keeps_lambda_inside_custom_bounds():
+    fit = ns.fit_ns(MONTHS, _curve(lam=0.3), bounds=(0.02, 0.1))
+
+    assert 0.02 <= fit.lam <= 0.1
+    assert fit.lam == pytest.approx(0.1, rel=1e-3)  # true lam is above the range
+
+
+def test_fit_rejects_too_few_points_and_bad_bounds():
+    with pytest.raises(ValueError, match="at least 4"):
+        ns.fit_ns([3, 24, 120], [4.0, 4.2, 4.5])
+    with pytest.raises(ValueError, match="bounds"):
+        ns.fit_ns(MONTHS, _curve(), bounds=(0.5, 0.1))

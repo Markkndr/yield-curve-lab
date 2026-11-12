@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from yieldcurve import plots
 
@@ -56,3 +57,38 @@ def test_spread_chart_resamples_to_period_closes():
 
     assert len(fig.data[0].x) == 12  # 60 business days = 12 weeks
     assert fig.data[0].y[-1] == s.iloc[-1]
+
+
+def test_yield_history_one_line_per_column_without_gaps():
+    table = _table()[["1M", "10Y"]]
+    fig = plots.yield_history(table)
+
+    assert [t.name for t in fig.data] == ["1M", "10Y"]
+    assert len(fig.data[0].x) == table["1M"].count()  # January NaNs dropped
+    assert fig.data[1].y[-1] == table["10Y"].iloc[-1]
+
+    weekly = plots.yield_history(table, freq="W-FRI")
+    assert len(weekly.data[1].x) == 12
+
+
+def test_line_chart_averages_per_period_and_adds_zero_line():
+    s = _table()["10Y"]
+    fig = plots.line_chart({"RMSE": s}, "Fit error", "bp", unit=" bp", freq="ME", zero_line=True)
+
+    assert [t.name for t in fig.data] == ["RMSE"]
+    assert len(fig.data[0].x) == 3  # January to March
+    assert fig.data[0].y[0] == pytest.approx(s.loc["2024-01"].mean())
+    assert fig.layout.yaxis.title.text == "bp"
+    assert len(fig.layout.shapes) == 1
+
+
+def test_curve_fit_plots_observed_markers_and_fit_lines():
+    observed = pd.Series({"1M": NAN, "2Y": 4.0, "10Y": 4.5})
+    fit = pd.Series([3.9, 4.2, 4.6], index=[1.0, 5.0, 10.0])
+    fig = plots.curve_fit(observed, {"Fixed": fit})
+
+    assert [t.name for t in fig.data] == ["Observed", "Fixed"]
+    assert list(fig.data[0].x) == [2.0, 10.0]  # missing 1M dropped
+    assert fig.data[0].mode == "markers"
+    assert fig.data[1].mode == "lines"
+    assert list(fig.layout.xaxis.ticktext) == ["2Y", "10Y"]

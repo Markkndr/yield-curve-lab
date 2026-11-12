@@ -203,3 +203,132 @@ def spread_chart(
         margin=dict(b=90),
     )
     return fig
+
+
+def yield_history(
+    table: pd.DataFrame,
+    title: str = "Yields over time",
+    freq: str | None = None,
+) -> go.Figure:
+    """Plot each column of `table` (yields in percent) as a line over time.
+
+    Pass a slice of a yield table, e.g. `table.loc["2021":"2024", ["3M", "10Y"]]`.
+    With `freq` (e.g. "W-FRI"), each series is plotted at period closes.
+    """
+    fig = go.Figure()
+    for label in table.columns:
+        s = table[label].dropna()
+        if freq is not None:
+            s = s.resample(freq).last().dropna()
+        fig.add_trace(
+            go.Scatter(
+                x=s.index,
+                y=s.to_numpy(),
+                name=label,
+                mode="lines",
+                line=dict(width=2),
+                hovertemplate="%{y:.2f}%",
+            )
+        )
+    fig.update_layout(
+        template=TEMPLATE,
+        title=title,
+        hovermode="x unified",
+        xaxis=dict(title=None),
+        yaxis=dict(title="Yield (%)"),
+        legend=dict(orientation="h", yanchor="top", y=-0.1, x=0),
+        margin=dict(b=90),
+    )
+    return fig
+
+
+def line_chart(
+    series: Mapping[str, pd.Series],
+    title: str,
+    y_title: str,
+    unit: str = "",
+    freq: str | None = None,
+    zero_line: bool = False,
+) -> go.Figure:
+    """Plot named time series as lines, for anything that is not a plain yield.
+
+    `unit` is appended to hover values (e.g. " bp"). With `freq` (e.g. "ME"),
+    each series is averaged per period, which suits noisy daily measures.
+    """
+    fig = go.Figure()
+    for label, s in series.items():
+        s = s.dropna()
+        if freq is not None:
+            s = s.resample(freq).mean().dropna()
+        fig.add_trace(
+            go.Scatter(
+                x=s.index,
+                y=s.to_numpy(),
+                name=label,
+                mode="lines",
+                line=dict(width=2),
+                hovertemplate="%{y:.2f}" + unit,
+            )
+        )
+    if zero_line:
+        fig.add_hline(y=0, line=dict(color=BASELINE, width=1))
+    fig.update_layout(
+        template=TEMPLATE,
+        title=title,
+        hovermode="x unified",
+        xaxis=dict(title=None),
+        yaxis=dict(title=y_title),
+        legend=dict(orientation="h", yanchor="top", y=-0.1, x=0),
+        margin=dict(b=90),
+    )
+    return fig
+
+
+def curve_fit(
+    observed: pd.Series,
+    fits: Mapping[str, pd.Series],
+    title: str = "Observed and fitted curve",
+) -> go.Figure:
+    """Plot one day's observed yields as markers and fitted curves as lines.
+
+    `observed` is indexed by maturity label (e.g. from `data.curve_on`). Each
+    fit is a Series of yields indexed by maturity in years, usually evaluated
+    on a dense grid so the line is smooth.
+    """
+    observed = observed.dropna()
+    fig = go.Figure(
+        go.Scatter(
+            x=[MATURITY_YEARS[m] for m in observed.index],
+            y=observed.to_numpy(),
+            customdata=observed.index,
+            name="Observed",
+            mode="markers",
+            marker=dict(size=10, color=INK, line=dict(width=2, color=SURFACE)),
+            hovertemplate="%{customdata}: %{y:.2f}%",
+        )
+    )
+    for label, fit in fits.items():
+        fig.add_trace(
+            go.Scatter(
+                x=fit.index,
+                y=fit.to_numpy(),
+                name=label,
+                mode="lines",
+                line=dict(width=2),
+                hovertemplate="%{y:.2f}%",
+            )
+        )
+    fig.update_layout(
+        template=TEMPLATE,
+        title=title,
+        xaxis=dict(
+            title="Maturity",
+            type="log",
+            tickvals=[MATURITY_YEARS[m] for m in observed.index],
+            ticktext=list(observed.index),
+        ),
+        yaxis=dict(title="Yield (%)"),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, x=0),
+        margin=dict(b=110),
+    )
+    return fig

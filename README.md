@@ -200,6 +200,7 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 - 💾 **Parquet cache:** 16,000+ trading days from 1962 onward, with the full 1M–30Y curve available from July 2001
 - 🇭🇺 **Hungarian benchmark yields:** ÁKK's daily benchmark yields (3M, 6M, 1Y, 3Y, 5Y, 10Y, 15Y from 2002-01-03; 20Y from 2020-05-20) through the same clean → validate → Parquet steps. There is no 2Y benchmark, so Hungarian slopes use 10Y–3Y or 10Y–3M
 - 🧪 **Tests:** offline unit tests with fake FRED and ÁKK fetchers, plus live checks of both sources behind a `network` marker
+- 📐 **Nelson-Siegel (Phase 3, in progress):** factor loadings and a fixed-λ OLS fit (`fit_ns_fixed`), tested by recovering known betas from synthetic curves
 - 🔎 **EDA (Phase 2):** [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) covers data coverage, the curve on key dates (2007, 2008, the 2020 low, the 2022 hiking peak, latest) a yield heatmap since 1962, and 10Y–2Y / 10Y–3M inversion episodes against NBER recessions (the 2022–24 10Y–2Y inversion: 2022-07-06 to 2024-09-05, the longest in the sample), and a Hungary 2022–23 case study (long yields peaked on 2022-10-14, the day of the MNB's emergency move; the 10Y–3M inversion reached −685 bp in January 2023, against −189 bp in the US), using reusable Plotly helpers in `yieldcurve.plots`
 
 > 📝 Note: ÁKK has no documented download API. The loader calls the JSON endpoint behind the [benchmark-yields page](https://www.akk.hu/hu/statisztika/hozamok-indexek-forgalmi-adatok/referenciahozamok), which could change without notice, so the Parquet cache is the dependable copy.
@@ -236,6 +237,16 @@ The foundation (Phases 0 and 1, US data) is in place. Implemented so far:
 | `spread(table, long="10Y", short="2Y")` | Long minus short yield in percentage points (negative = inverted) |
 | `find_inversions(spread, min_days=10, merge_gap=5)` | Inversion episodes: start, end, trading days, deepest spread and its date, ongoing flag |
 | `recession_periods()` | NBER recessions as start/end dates (FRED shading convention) |
+
+### Python API — `yieldcurve.nelson_siegel`
+
+Maturities are in months, as in Diebold and Li (2006).
+
+| Function / constant | Description |
+|---------------------|-------------|
+| `ns_loadings(maturities, lam=0.0609)` | Level, slope and curvature loadings for each maturity |
+| `fit_ns_fixed(maturities, yields, lam=0.0609)` | OLS fit of the three betas with λ fixed; returns an `NSFit` (betas, λ, fitted curve, residuals, `rmse`) |
+| `DIEBOLD_LI_LAMBDA` | 0.0609, which puts the curvature loading's peak near 30 months |
 
 ---
 
@@ -309,13 +320,11 @@ yield-curve-lab/
 ├── src/yieldcurve/
 │   ├── config.py          # Project paths and FRED API key loading
 │   ├── data.py            # Fetch → clean → validate → Parquet cache
+│   ├── factors.py         # Empirical level, slope and curvature proxies
+│   ├── nelson_siegel.py   # Nelson-Siegel loadings and fits, from scratch
 │   ├── plots.py           # Plotly figures shared by notebooks and the dashboard
 │   └── spreads.py         # Term spreads, inversion episodes, NBER recessions
-├── tests/
-│   ├── test_config.py
-│   ├── test_data.py
-│   ├── test_plots.py
-│   └── test_spreads.py
+├── tests/                 # One test module per source module
 ├── data/                  # Parquet cache (git-ignored, rebuilt by the pipeline)
 ├── notebooks/
 │   └── 01_eda.ipynb       # Coverage, key-date curves, heatmap, spreads and inversions, Hungary 2022–23
@@ -324,7 +333,7 @@ yield-curve-lab/
 └── LICENSE
 ```
 
-Planned additions: `nelson_siegel.py`, `pca.py`, `forecast.py`, and a `genai/` package under `src/yieldcurve/`, plus `api/`, `app/`, and `eval/` at the top level.
+Planned additions: `pca.py`, `forecast.py`, and a `genai/` package under `src/yieldcurve/`, plus `api/`, `app/`, and `eval/` at the top level.
 
 ---
 
